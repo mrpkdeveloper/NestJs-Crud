@@ -3,12 +3,43 @@ import { AuthDto } from "./dto";
 import * as argon from 'argon2';
 import { PrismaService } from "src/prisma/prisma.service";
 import { PrismaClientKnownRequestError } from "@prisma/client/runtime";
+import { JwtService } from "@nestjs/jwt";
+import { ConfigService } from "@nestjs/config";
 
 @Injectable({})
 export class AuthService {
-    constructor(private prisma: PrismaService) { }
+    constructor(
+        private prisma: PrismaService,
+        private jwt: JwtService,
+        private config: ConfigService) { }
 
     // login and signup are two functions created for writing logic for auth
+
+    async signup(dto: AuthDto) {
+
+        //generate password hash
+        const hash = await argon.hash(dto.password);
+
+        //store user info in db
+        try {
+            const user = await this.prisma.user.create({
+                data: {
+                    email: dto.email,
+                    passwordhash: hash
+                }
+            })
+
+            //return jwt
+            return this.signToken(user.id, user.email);
+
+        } catch (error) {
+            if (error instanceof PrismaClientKnownRequestError) {
+                if (error.code === 'P2002') {
+                    throw new ForbiddenException("Already registered user mail");
+                }
+            }
+        }
+    }
 
     async signin(dto: AuthDto) {
 
@@ -30,35 +61,25 @@ export class AuthService {
             throw new ForbiddenException("incorrect credentials");
         }
 
-        delete user.passwordhash;
-        return user;
+        return this.signToken(user.id, user.email);
     }
 
-    async signup(dto: AuthDto) {
+    //this function will return jwt token
+    async signToken(userId: number, email: string): Promise<{ access_token: string }> {
 
-        //generate password hash
-        const hash = await argon.hash(dto.password);
+        const payload = {
+            sub: userId,
+            email
+        }
 
-        //store user info in db
-        try {
-            const user = await this.prisma.user.create({
-                data: {
-                    email: dto.email,
-                    passwordhash: hash
-                }
-            })
+        const token = await this.jwt.signAsync(payload, {
+            expiresIn: '15m',
+            secret: this.config.get('JWT_SECREAT')
+        })
 
-            //return saved user
-            delete user.passwordhash;
-            return user;
-        } catch (error) {
-            if (error instanceof PrismaClientKnownRequestError) {
-                if (error.code === 'P2002') {
-                    throw new ForbiddenException("Already registered user mail");
-                }
-            }
+        return {
+            access_token: token
         }
     }
-
 
 }
